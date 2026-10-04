@@ -1,4 +1,0 @@
-- [x] Améliorer `PersistentCookieJar.kt` (détection et prolongement de session)
-- [x] Modifier `AuthViewModel.kt` pour un `checkSession` silencieux au démarrage
-- [x] Ajuster `MainActivity.kt` pour une transition fluide vers le Login
-- [x] Vérifier la reconnexion automatique réelle après redémarrage

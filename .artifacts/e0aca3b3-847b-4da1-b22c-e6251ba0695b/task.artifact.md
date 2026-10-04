@@ -1,5 +1,0 @@
-- `[x]` Mise à jour de `PersistentCookieJar.kt` (syncToWebView, clear, persistence logic)
-- `[x]` Mise à jour de `AuthRepository.kt` (injection de CookieJar, nettoyage au logout)
-- `[x]` Mise à jour de `ViewModelFactory.kt` (instanciation correcte du repository)
-- `[x]` Mise à jour de `MainActivity.kt` (appel de syncToWebView dans le handshake)
-- `[x]` Vérification du build et tests
