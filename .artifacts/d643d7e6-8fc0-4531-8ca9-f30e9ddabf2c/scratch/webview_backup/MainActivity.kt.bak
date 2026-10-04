@@ -1,0 +1,518 @@
+package com.loi.lnet
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.os.Bundle
+import android.webkit.*
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import android.app.Activity
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.URL
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            LnetApp()
+        }
+    }
+
+    companion object {
+        const val HOME_URL = "https://lnet.page.gd"
+        const val VERSION_URL = "https://devffin.github.io/dl/updates/com.loi.lnet/version.txt"
+        const val APK_URL = "https://devffin.github.io/dl/updates/com.loi.lnet/app.apk"
+        const val NOTIFICATION_URL = "https://devffin.github.io/dl/updates/com.loi.lnet/notification.json"
+        const val PREFS_NAME = "lnet_prefs"
+        const val KEY_LAST_MSG_ID = "last_msg_id"
+        const val USER_AGENT_SUFFIX = " LNET-Android-App"
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun LnetApp() {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val isDarkTheme = isSystemInDarkTheme()
+
+    // Adaptation de la couleur des icônes système (batterie, heure, etc.)
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            // Si le fond est clair, on veut des icônes sombres (isAppearanceLightStatusBars = true)
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDarkTheme
+        }
+    }
+
+    var isLoading by remember { mutableStateOf(true) }
+    var loadProgress by remember { mutableIntStateOf(0) }
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    var canGoBack by remember { mutableStateOf(false) }
+    var hasError by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf("") }
+    var errorDetail by remember { mutableStateOf("") }
+    var errorIcon by remember { mutableStateOf(Icons.Default.Warning) }
+
+    // États pour le système de mise à jour
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var latestVersion by remember { mutableStateOf("") }
+    var updateCheckError by remember { mutableStateOf(false) }
+    var skipUpdateCheck by remember { mutableStateOf(false) }
+    var updateCheckTrigger by remember { mutableIntStateOf(0) }
+
+    // États pour le système de notifications admin
+    var showAdminNotification by remember { mutableStateOf(false) }
+    var adminMessageTitle by remember { mutableStateOf("") }
+    var adminMessageContent by remember { mutableStateOf("") }
+    var adminMessageIcon by remember { mutableStateOf(Icons.Default.Notifications) }
+    var adminMessageButtonText by remember { mutableStateOf("J'ai compris") }
+    var adminMessageActionText by remember { mutableStateOf<String?>(null) }
+    var adminMessageActionUrl by remember { mutableStateOf<String?>(null) }
+
+    // État pour la barre de navigation silencieuse
+    var isBottomBarVisible by remember { mutableStateOf(false) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Vérification de mise à jour et notifications au démarrage
+    LaunchedEffect(updateCheckTrigger) {
+        if (!skipUpdateCheck) {
+            updateCheckError = false
+            withContext(Dispatchers.IO) {
+                try {
+                    // 1. Vérification Version
+                    val remoteVersion = URL(MainActivity.VERSION_URL).readText().trim()
+                    if (remoteVersion != BuildConfig.VERSION_NAME) {
+                        latestVersion = remoteVersion
+                        showUpdateDialog = true
+                    }
+
+                    // 2. Vérification Notifications Admin
+                    val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                    val lastMsgId = prefs.getInt(MainActivity.KEY_LAST_MSG_ID, -1)
+
+                    val response = URL(MainActivity.NOTIFICATION_URL).readText().trim()
+                    val json = JSONObject(response)
+                    val msgId = json.getInt("id")
+
+                    if (msgId > lastMsgId) {
+                        adminMessageTitle = json.optString("title", "Annonce")
+                        adminMessageContent = json.optString("content", "")
+                        adminMessageButtonText = json.optString("buttonText", "J'ai compris")
+                        adminMessageActionText = if (json.has("actionText")) json.getString("actionText") else null
+                        adminMessageActionUrl = if (json.has("actionUrl")) json.getString("actionUrl") else null
+
+                        adminMessageIcon = when (json.optString("icon", "notifications")) {
+                            "warning" -> Icons.Default.Warning
+                            "info" -> Icons.Default.Info
+                            "refresh" -> Icons.Default.Refresh
+                            "star" -> Icons.Default.Star
+                            else -> Icons.Default.Notifications
+                        }
+
+                        showAdminNotification = true
+                        prefs.edit { putInt(MainActivity.KEY_LAST_MSG_ID, msgId) }
+                    }
+                } catch (_: Exception) {
+                    updateCheckError = true
+                }
+            }
+        }
+    }
+
+    // Animation fluide pour la barre de progression
+    val animatedProgress by animateFloatAsState(
+        targetValue = loadProgress / 100f,
+        label = "ProgressAnimation"
+    )
+
+    BackHandler(enabled = canGoBack) {
+        webView?.goBack()
+    }
+
+    MaterialTheme {
+        Scaffold(
+            modifier = Modifier.fillMaxSize().statusBarsPadding(),
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            floatingActionButton = {
+                if (!isBottomBarVisible) {
+                    IconButton(
+                        onClick = { isBottomBarVisible = true },
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .size(32.dp)
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowUp,
+                            contentDescription = "Menu",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = paddingValues.calculateTopPadding())
+            ) {
+                // Barre de progression moderne en haut
+                this@Column.AnimatedVisibility(
+                    visible = isLoading && loadProgress < 100,
+                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+                ) {
+                    LinearProgressIndicator(
+                        progress = { animatedProgress },
+                        modifier = Modifier.fillMaxWidth().height(2.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = Color.Transparent
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                        super.onPageStarted(view, url, favicon)
+                                        isLoading = true
+                                        hasError = false
+                                    }
+
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        isLoading = false
+                                        canGoBack = view?.canGoBack() ?: false
+
+                                        // Injection de CSS pour transformer le site en "App Mobile"
+                                        val css = """
+                                            header, nav, footer, .footer, .header, .navbar { display: none !important; }
+                                            body {
+                                                margin: 0 !important;
+                                                padding: 0 !important;
+                                                background-color: #ffffff !important;
+                                                -webkit-user-select: none;
+                                            }
+                                            button, a.btn, .button {
+                                                min-height: 44px !important;
+                                                border-radius: 8px !important;
+                                            }
+                                            .app-banner, .smartbanner { display: none !important; }
+                                        """.trimIndent()
+
+                                        val script = "var style = document.createElement('style'); style.innerHTML = '$css'; document.head.appendChild(style);"
+                                        view?.evaluateJavascript(script, null)
+                                    }
+
+                                    override fun onReceivedError(
+                                        view: WebView?,
+                                        request: WebResourceRequest?,
+                                        error: WebResourceError?
+                                    ) {
+                                        if (request?.isForMainFrame == true) {
+                                            hasError = true
+                                            isLoading = false
+
+                                            when (error?.errorCode) {
+                                                ERROR_HOST_LOOKUP, ERROR_CONNECT -> {
+                                                    errorMessage = "Pas de connexion internet"
+                                                    errorDetail = "Vérifiez votre Wi-Fi ou vos données mobiles pour accéder à LNET."
+                                                    errorIcon = Icons.Default.Warning
+                                                }
+                                                ERROR_TIMEOUT -> {
+                                                    errorMessage = "Délai d'attente dépassé"
+                                                    errorDetail = "Le serveur de LNET met trop de temps à répondre. Réessayez dans un instant."
+                                                    errorIcon = Icons.Default.Refresh
+                                                }
+                                                else -> {
+                                                    errorMessage = "Oups ! Une erreur est survenue"
+                                                    errorDetail = "Une erreur inattendue empêche le chargement de la page."
+                                                    errorIcon = Icons.Default.Info
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: WebResourceRequest?
+                                    ): Boolean {
+                                        val url = request?.url?.toString() ?: return false
+                                        return if (url.startsWith("http://") || url.startsWith("https://")) {
+                                            false
+                                        } else {
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                                                context.startActivity(intent)
+                                                true
+                                            } catch (_: Exception) {
+                                                true
+                                            }
+                                        }
+                                    }
+                                }
+
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                        loadProgress = newProgress
+                                    }
+                                }
+
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    loadWithOverviewMode = true
+                                    useWideViewPort = true
+                                    setSupportZoom(true)
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
+                                    cacheMode = WebSettings.LOAD_DEFAULT
+                                    userAgentString += MainActivity.USER_AGENT_SUFFIX
+                                }
+
+                                loadUrl(MainActivity.HOME_URL)
+                                webView = this
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Interface d'erreur
+                    if (hasError) {
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            color = MaterialTheme.colorScheme.background
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize().padding(32.dp)) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.Center),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Icon(
+                                        imageVector = errorIcon,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(64.dp),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        text = errorMessage,
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Text(
+                                        text = errorDetail,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(24.dp))
+                                    Button(
+                                        onClick = {
+                                            hasError = false
+                                            isLoading = true
+                                            webView?.reload()
+                                        },
+                                        shape = MaterialTheme.shapes.medium
+                                    ) {
+                                        Text("Réessayer")
+                                    }
+                                }
+
+                                Text(
+                                    text = "Version ${BuildConfig.VERSION_NAME}",
+                                    modifier = Modifier.align(Alignment.BottomCenter),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Barre de navigation animée
+                this@Column.AnimatedVisibility(
+                    visible = isBottomBarVisible,
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                ) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 0.dp
+                    ) {
+                        NavigationBarItem(
+                            selected = false,
+                            enabled = canGoBack,
+                            onClick = {
+                                webView?.goBack()
+                                isBottomBarVisible = false
+                            },
+                            icon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour") },
+                            label = { Text("Retour") }
+                        )
+                        NavigationBarItem(
+                            selected = !canGoBack,
+                            onClick = {
+                                webView?.loadUrl(MainActivity.HOME_URL)
+                                isBottomBarVisible = false
+                            },
+                            icon = { Icon(Icons.Default.Home, contentDescription = "Accueil") },
+                            label = { Text("LNET") }
+                        )
+                        NavigationBarItem(
+                            selected = false,
+                            onClick = {
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, webView?.url ?: MainActivity.HOME_URL)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Partager"))
+                                isBottomBarVisible = false
+                            },
+                            icon = { Icon(Icons.Default.Share, contentDescription = "Partager") },
+                            label = { Text("Partager") }
+                        )
+                        NavigationBarItem(
+                            selected = false,
+                            onClick = {
+                                webView?.clearCache(true)
+                                WebStorage.getInstance().deleteAllData()
+                                CookieManager.getInstance().removeAllCookies(null)
+                                webView?.reload()
+                                isBottomBarVisible = false
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("Cache vidé avec succès")
+                                }
+                            },
+                            icon = { Icon(Icons.Default.Delete, contentDescription = "Nettoyer") },
+                            label = { Text("Nettoyer") }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Dialogues système (Mise à jour / Notifications)
+        if (updateCheckError && !skipUpdateCheck) {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Erreur de vérification") },
+                text = { Text("Impossible de vérifier les mises à jour. Le fichier de version est peut-être manquant ou inaccessible.") },
+                confirmButton = {
+                    Button(onClick = { updateCheckTrigger++ }) {
+                        Text("Réessayer")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { skipUpdateCheck = true }) {
+                        Text("Ignorer et lancer")
+                    }
+                }
+            )
+        }
+
+        if (showUpdateDialog) {
+            AlertDialog(
+                onDismissRequest = { showUpdateDialog = false },
+                title = { Text("Mise à jour disponible") },
+                text = { Text("Une nouvelle version (v$latestVersion) est disponible. Voulez-vous la télécharger ?") },
+                confirmButton = {
+                    Button(onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, MainActivity.APK_URL.toUri())
+                        context.startActivity(intent)
+                        showUpdateDialog = false
+                    }) {
+                        Text("Mettre à jour")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUpdateDialog = false }) {
+                        Text("Plus tard")
+                    }
+                }
+            )
+        }
+
+        if (showAdminNotification) {
+            AlertDialog(
+                onDismissRequest = { showAdminNotification = false },
+                icon = { Icon(adminMessageIcon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                title = { Text(adminMessageTitle) },
+                text = { Text(adminMessageContent) },
+                confirmButton = {
+                    Button(onClick = { showAdminNotification = false }) {
+                        Text(adminMessageButtonText)
+                    }
+                },
+                dismissButton = {
+                    if (adminMessageActionText != null && adminMessageActionUrl != null) {
+                        TextButton(onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, adminMessageActionUrl!!.toUri())
+                            context.startActivity(intent)
+                            showAdminNotification = false
+                        }) {
+                            Text(adminMessageActionText!!)
+                        }
+                    }
+                }
+            )
+        }
+    }
+}

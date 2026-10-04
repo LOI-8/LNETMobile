@@ -1,0 +1,6 @@
+- [x] Mettre à jour la version du projet dans `build.gradle.kts`
+- [x] Retirer les fonctionnalités de Chat dans `MainScreen.kt`
+- [x] Retirer la barre de navigation inférieure dans `MainScreen.kt`
+- [x] Ajouter un bouton de retour au Dashboard dans la `TopAppBar`
+- [x] Nettoyer `ViewModelFactory.kt`
+- [x] Vérifier la compilation
